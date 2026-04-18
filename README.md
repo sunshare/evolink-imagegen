@@ -2,6 +2,8 @@
 
 Public skill repo for generating offline images through the Evolink async image API.
 
+中文说明见 [README.zh-CN.md](README.zh-CN.md).
+
 The packaged reference is based on the official Evolink:
 
 - `z-image-turbo` image-generation document:
@@ -19,7 +21,7 @@ The packaged reference is based on the official Evolink:
 For the Vercel-style installer, use:
 
 ```bash
-npx skills add <owner>/evolink-imagegen
+npx skills add sunshare/evolink-imagegen
 ```
 
 If the installer asks which skill to add, choose `evolink-imagegen`.
@@ -27,14 +29,14 @@ If the installer asks which skill to add, choose `evolink-imagegen`.
 For explicit selection, use the skill name if your installer version supports it:
 
 ```bash
-npx skills add <owner>/evolink-imagegen --skill evolink-imagegen
+npx skills add sunshare/evolink-imagegen --skill evolink-imagegen
 ```
 
 For Codex's GitHub-path installer, install with the skill path:
 
 ```bash
 python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo <owner>/evolink-imagegen \
+  --repo sunshare/evolink-imagegen \
   --path skills/evolink-imagegen
 ```
 
