@@ -1,0 +1,7 @@
+interface:
+  display_name: "Evolink ImageGen"
+  short_description: "Generate offline images with Evolink"
+  default_prompt: "Use $evolink-imagegen to generate an offline image asset through the Evolink API and save the results locally."
+
+policy:
+  allow_implicit_invocation: true
