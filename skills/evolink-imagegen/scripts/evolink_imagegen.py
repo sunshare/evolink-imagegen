@@ -21,6 +21,8 @@ DEFAULT_BASE_URL = os.environ.get("EVOLINK_API_BASE_URL", "https://api.evolink.a
 DEFAULT_MODEL = os.environ.get("EVOLINK_IMAGE_MODEL", "z-image-turbo")
 DEFAULT_OUTPUT_BASE = Path("generated/evolink-imagegen")
 USER_AGENT = "EvolinkImageGenSkill/1.0"
+SUCCESS_STATUSES = {"completed"}
+FAILURE_STATUSES = {"failed", "cancelled", "canceled"}
 
 
 class EvolinkApiError(RuntimeError):
@@ -181,14 +183,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def timestamp_slug() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
 
-def prompt_slug(prompt: str) -> str:
-    collapsed = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")
+def safe_label(value: str, default: str = "image") -> str:
+    collapsed = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     if not collapsed:
-        collapsed = "image"
-    return collapsed[:48].rstrip("-") or "image"
+        collapsed = default
+    return collapsed[:48].rstrip("-") or default
 
 
 def ensure_directory(path: Path) -> Path:
@@ -215,7 +217,15 @@ def run_directory_path(base_dir: Path, label: str) -> Path:
 
 
 def create_run_directory(base_dir: Path, label: str) -> Path:
-    return ensure_directory(run_directory_path(base_dir, label))
+    ensure_directory(base_dir)
+    base_name = f"{timestamp_slug()}-{label}"
+    candidate = base_dir / base_name
+    suffix = 2
+    while candidate.exists():
+        candidate = base_dir / f"{base_name}-{suffix}"
+        suffix += 1
+    candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
 
 
 def download_results(results: list[str], run_dir: Path) -> list[str]:
@@ -245,6 +255,23 @@ def task_summary(task: dict[str, Any], downloaded_files: list[str] | None = None
 
 def print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=True))
+
+
+def task_status(task: dict[str, Any]) -> str:
+    return str(task.get("status", "pending")).strip().lower()
+
+
+def task_failure_message(task: dict[str, Any]) -> str:
+    task_id = str(task.get("id", "")).strip() or "<unknown>"
+    status = task_status(task)
+    error = task.get("error")
+    if isinstance(error, dict):
+        code = str(error.get("code", "task_failed")).strip() or "task_failed"
+        message = str(error.get("message", "Unknown error")).strip() or "Unknown error"
+        return f"Task {task_id} {status}: {code}: {message}"
+    if error:
+        return f"Task {task_id} {status}: {error}"
+    return f"Task {task_id} {status}."
 
 
 def submit_command(args: argparse.Namespace) -> int:
@@ -287,10 +314,10 @@ def poll_until_complete(
             path=task_path,
             token=token,
         )
-        status = str(latest.get("status", "pending"))
+        status = task_status(latest)
         progress = latest.get("progress", 0)
         print(f"[poll {attempt}/{max_polls}] status={status} progress={progress}", file=sys.stderr)
-        if status in {"completed", "failed"}:
+        if status in SUCCESS_STATUSES | FAILURE_STATUSES:
             return latest
         if attempt < max_polls and poll_sleep > 0:
             time.sleep(poll_sleep)
@@ -299,7 +326,7 @@ def poll_until_complete(
 
 def poll_command(args: argparse.Namespace) -> int:
     token = require_token()
-    run_dir = create_run_directory(Path(args.outdir), args.task_id)
+    run_dir = create_run_directory(Path(args.outdir), safe_label(args.task_id, default="task"))
     task = poll_until_complete(
         base_url=args.base_url,
         token=token,
@@ -310,17 +337,21 @@ def poll_command(args: argparse.Namespace) -> int:
     write_json(run_dir / "task-final.json", task)
 
     downloaded_files: list[str] | None = None
-    if str(task.get("status")) == "completed" and not args.no_download:
+    if task_status(task) in SUCCESS_STATUSES and not args.no_download:
         results = [url for url in task.get("results", []) if isinstance(url, str) and url]
         downloaded_files = download_results(results, run_dir)
 
-    print_json(task_summary(task, downloaded_files))
+    summary = task_summary(task, downloaded_files)
+    print_json(summary)
+    if task_status(task) in FAILURE_STATUSES:
+        print(task_failure_message(task), file=sys.stderr)
+        return 1
     return 0
 
 
 def generate_command(args: argparse.Namespace) -> int:
     payload = build_payload(args)
-    label = prompt_slug(args.prompt)
+    label = safe_label(args.prompt)
     run_dir = run_directory_path(Path(args.outdir), label)
 
     if args.dry_run:
@@ -335,7 +366,7 @@ def generate_command(args: argparse.Namespace) -> int:
         return 0
 
     token = require_token()
-    ensure_directory(run_dir)
+    run_dir = create_run_directory(Path(args.outdir), label)
     write_json(
         run_dir / "request.json",
         {
@@ -368,11 +399,15 @@ def generate_command(args: argparse.Namespace) -> int:
     write_json(run_dir / "task-final.json", task)
 
     downloaded_files: list[str] | None = None
-    if str(task.get("status")) == "completed":
+    if task_status(task) in SUCCESS_STATUSES:
         results = [url for url in task.get("results", []) if isinstance(url, str) and url]
         downloaded_files = download_results(results, run_dir)
 
-    print_json(task_summary(task, downloaded_files))
+    summary = task_summary(task, downloaded_files)
+    print_json(summary)
+    if task_status(task) in FAILURE_STATUSES:
+        print(task_failure_message(task), file=sys.stderr)
+        return 1
     return 0
 
 
